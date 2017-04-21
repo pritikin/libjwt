@@ -266,6 +266,49 @@ int jwt_del_grant(jwt_t *jwt, const char *grant)
 
 /** @} */
 
+
+/**
+ * @defgroup jwt_header JWT Header Parameter Manipulation
+ * These functions allow you to add, remove and retrieve header 
+ * parameters from a JWT object. See JWT [RFC7519] section 5 and 
+ * JWS [RVC7519] section for a  discussion of header parameters
+ * 
+ * Individual get and add 'parameter' functions are future work
+ * @{
+ */
+
+/**
+ * Add header parameters from a JSON encoded object string.
+ *
+ * Overwrites existing heade parameters using the JSON encoded object
+ * 'alg' and 'typ' are removed from input
+ * 		use jwt_set_alg instead
+ * 		typ is always JWT
+ *
+ * @param jwt Pointer to a JWT object.
+ * @param json String containing a JSON encoded object of header parameters.
+ * @return Returns 0 on success, valid errno otherwise.
+ */
+int jwt_add_params_json(jwt_t *jwt, const char *json);
+
+/**
+ * Return the header parameters as JSON encoded object string.
+ *
+ * Returns the JSON encoded string value of the entire header. If it
+ * does not exist, NULL will be returned.
+ *
+ * @param jwt Pointer to a JWT object.
+ * @param grant String containing the name of the parameter to return a value
+ *     for. If this is NULL, all parameters will be returned as a JSON encoded
+ *     hash.
+ * @return Returns a string for the value, or NULL when not found. The
+ *     returned string must be freed by the caller.
+ */
+char *jwt_get_params_json(jwt_t *jwt, const char *parameter);
+
+
+/** @} */
+
 /**
  * @defgroup jwt_encode JWT Output Functions
  * Functions that enable seeing the plain text or fully encoded version of

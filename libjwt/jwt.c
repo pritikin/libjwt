@@ -63,6 +63,8 @@ static int ECDSA_SIG_set0(ECDSA_SIG *sig, BIGNUM *r, BIGNUM *s)
 
 struct jwt {
 	jwt_alg_t alg;
+	json_t *params; /* everything except alg */
+
 	unsigned char *key;
 	int key_len;
 	json_t *grants;
@@ -189,7 +191,11 @@ int jwt_new(jwt_t **jwt)
 	memset(*jwt, 0, sizeof(jwt_t));
 
 	(*jwt)->grants = json_object();
-	if (!(*jwt)->grants) {
+	(*jwt)->params = json_object();
+
+	if (!((*jwt)->grants) || !((*jwt)->params)) {
+		free((*jwt)->grants);
+		free((*jwt)->params);
 		free(*jwt);
 		*jwt = NULL;
 		return ENOMEM;
@@ -206,6 +212,7 @@ void jwt_free(jwt_t *jwt)
 	jwt_scrub_key(jwt);
 
 	json_decref(jwt->grants);
+	json_decref(jwt->params);
 
 	free(jwt);
 }
@@ -242,6 +249,10 @@ jwt_t *jwt_dup(jwt_t *jwt)
 
 	new->grants = json_deep_copy(jwt->grants);
 	if (!new->grants)
+		errno = ENOMEM;
+
+	new->params = json_deep_copy(jwt->params);
+	if (!new->params)
 		errno = ENOMEM;
 
 dup_fail:
@@ -771,6 +782,11 @@ static int jwt_verify_head(jwt_t *jwt, char *head)
 	const char *val;
 	int ret;
 
+	if (jwt->params) {
+		json_decref(jwt->params);
+		jwt->params = NULL;
+	}
+
 	js = jwt_b64_decode_json(head);
 	if (!js)
 		return EINVAL;
@@ -797,6 +813,16 @@ static int jwt_verify_head(jwt_t *jwt, char *head)
 		if (jwt->key){
 			ret = EINVAL;
 		}
+	}
+
+	/* only successfully verified params to the jwt */
+	if (EINVAL != ret) {
+		if (jwt->params) {
+			json_decref(jwt->params);
+			jwt->params = NULL;
+		}
+		jwt->params = js;
+		json_incref(jwt->params);
 	}
 
 verify_head_done:
@@ -988,6 +1014,51 @@ int jwt_del_grants(jwt_t *jwt, const char *grant)
 	return 0;
 }
 
+char *jwt_get_params_json(jwt_t *jwt, const char *param)
+{
+	json_t *js_val = NULL;
+
+	errno = EINVAL;
+
+	if (!jwt)
+		return NULL;
+
+	if (param && strlen(param))
+		js_val = json_object_get(jwt->params, param);
+	else
+		js_val = jwt->params;
+
+	if (js_val == NULL)
+		return NULL;
+
+	errno = 0;
+
+	return json_dumps(js_val, JSON_SORT_KEYS | JSON_COMPACT | JSON_ENCODE_ANY);
+}
+
+int jwt_add_params_json(jwt_t *jwt, const char *json)
+{
+	json_t *js_val;
+	int ret = -1;
+
+	if (!jwt)
+		return EINVAL;
+
+	js_val = json_loads(json, JSON_REJECT_DUPLICATES, NULL);
+	if (js_val) {
+		json_object_del (js_val, "alg");
+		json_object_del (js_val, "typ");
+	}
+
+	// BUG BUG: am I understanding the ref counts correctly?
+	json_decref(jwt->params);
+	jwt->params = js_val;
+	json_incref(js_val);
+	ret = 0;
+
+	return ret ? EINVAL : 0;
+}
+
 #ifdef NO_WEAK_ALIASES
 int jwt_del_grant(jwt_t *jwt, const char *grant)
 {
@@ -1022,6 +1093,22 @@ static void jwt_write_bio_head(jwt_t *jwt, BIO *bio, int pretty)
 
 	BIO_printf(bio, "\"alg\":%s\"%s\"", pretty?" ":"",
 		   jwt_alg_str(jwt->alg));
+
+	/* alternative approach: insert correct alg & type into
+	 * (a copy of) jwt->params and use json_dumps. Not used here because
+	 * existing tests expect the exact current format */
+	const char *key;
+	json_t *value;
+	json_object_foreach(jwt->params, key, value) {
+		BIO_puts(bio, ",");
+
+		if (pretty)
+			BIO_puts(bio, "\n");
+
+		// BUG BUG: json_dumps is documented as not RFC4627 when JSON_ENCODE_ANY is used. But json_dumps doesn't dump a value of type string unless this is included. I should be able to indicate why this is either a bug in jansson or a bug here
+		// BUG BUG: arguably pretty flag should be "JSON_INDENT(4)" instead of "0" but the indentation gets all messed up because we're recusively dumping within a dump. Sticking with compact(ish) forms. 
+		BIO_printf(bio,"    \"%s\":%s%s", key, pretty?" ":"", json_dumps(value, (pretty?0:JSON_COMPACT) | JSON_ENCODE_ANY));
+	}
 
 	if (pretty)
 		BIO_puts(bio, "\n");
